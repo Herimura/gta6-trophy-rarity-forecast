@@ -1,25 +1,62 @@
-# gta6-trophy-rarity-forecast
+# GTA VI Trophy Rarity Forecast
 
-[![make.fun · gta6-trophy-rarity-forecast-01](https://make.fun/badge/gta6-trophy-rarity-forecast-01.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
-[![rank](https://make.fun/badge/gta6-trophy-rarity-forecast-01/Herimura/gta6-trophy-rarity-forecast/rank.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
-[![reward](https://make.fun/badge/gta6-trophy-rarity-forecast-01/Herimura/gta6-trophy-rarity-forecast/reward.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
+![Bounty badge](https://make.fun/badge/gta6-trophy-rarity-forecast-01.svg)
 
-Forecasts, for every PlayStation 5 trophy of Grand Theft Auto VI, the percent of Exophase-tracked players who will have earned it at the case's target, as five quantiles (5/25/50/75/95%), scored by pinball loss on the logit scale. `main.py` (Python, standard library only, deterministic, no network) reduces each case's read history to its distinct page snapshots — the page only changes when Exophase refreshes it.
+Bounty: [gta6-trophy-rarity-forecast-01](https://make.fun/bounty/gta6-trophy-rarity-forecast-01)
 
-**v2 method.** With a single frozen snapshot (the page has not refreshed in the window, as on launch night) every rate is diluted by a saturating shift, `-1.9 * (1 - exp(-(stale + horizon) / 3h))`, with a tight logit spread `0.30 + 0.10 * sqrt(horizon_days)`. With two or more snapshots it fits each trophy's logit rate on log-time, shrinks each slope toward the pooled median slope, and extrapolates to the target; the spread comes from the fit's own residuals plus horizon and refresh terms.
+## What this forecasts
 
-**Validation (run twice, identical).** Practice reconstructions built from the house's published aggregates (3,868 players, 4,276 trophies earned) under five per-trophy split assumptions: loss **0.093 / 0.070** on the two published reconstructions, worst case **0.134** across all five splits (typical miss 0.02 / 0.01 pp, 90%-band coverage 0.98). Synthetic final-style regimes (dilution / progression / mixed): **0.112 / 0.199 / 0.141** — beating the house curve baseline (0.240 / 0.277 / 0.263) and the v1 earners-space entry (0.283 / 0.275 / 0.259) on all three. Format, determinism (byte-identical outputs) and timing (0.06 s per case vs the 8 s cap) all pass.
+For every PlayStation 5 trophy of Grand Theft Auto VI, this program
+predicts the earn rate the trophy will show on Exophase at the case
+target — the percentage of tracked players who have earned it — and
+reports that prediction as five quantiles (5%, 25%, 50%, 75% and 95%)
+per trophy. It reads each case file (`*.in`) from `$MAKEFUN_INPUT_DIR`
+(default `/input`) and writes one compact JSON forecast (`<stem>.out`)
+per case into `$MAKEFUN_OUTPUT_DIR` (default `/output`). The program
+is Python 3, standard library only, deterministic and fully offline.
 
-v1 ("Earners-Space Forecaster", commit 251e500) scored a real practice loss of 0.272 on the live board — its recon estimate (0.236) was optimistic because the real per-trophy split of new earners was far more concentrated on common trophies than the two published reconstructions assumed. v2 was selected by minimax across all five split assumptions, so it holds up under the concentrated-split world too.
+## Method (v2)
 
-## Run it
+All modelling happens on the logit scale, where a move from 1% to 2%
+counts about as much as a move from 33% to 50%. Two regimes are
+handled separately:
 
-```sh
-mkdir -p out && MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
-```
+- **Flat history.** If the recorded reads never change (consecutive
+  duplicate reads collapse into one), the page is treated as stale:
+  a refresh is expected to dilute the rates, so each last rate is
+  scaled down in rate space by a factor that deepens with how long
+  the history has been frozen plus the forecast horizon, saturating
+  at a shift of −1.9. The spread starts at 0.30 on the logit scale
+  and widens slowly with the horizon. A trophy already at 99.99%
+  stays pinned there with a narrow spread.
+- **Moving history.** Rates are regressed against the logarithm of
+  hours since release (release-day midnight, or the first read when
+  no release date is given), using only the last 24 hours of distinct
+  reads (or the last eight reads when that window is thinner). Each
+  trophy's own least-squares slope is shrunk towards a pooled slope —
+  the median slope across all trophies with enough points — with the
+  trophy's point count weighed against ten pooled pseudo-points, and
+  slopes are capped at ±6. The projection to the target is never
+  allowed to stray more than 3 logit units from the last observed
+  rate. The shared spread combines the fit residuals with a term that
+  grows with the distance from the window's centre to the target,
+  floored at 0.30 and capped at 1.2; saturated trophies keep their
+  narrow 0.15 spread instead.
 
-(one `<id>.out` per `<id>.in` case found in the input directory)
+Quantiles are formed by shifting the median's logit by the standard
+normal quantiles (−1.645, −0.674, 0, 0.674, 1.645) times the spread,
+converting back to percentages, rounding half-up to four decimals,
+and enforcing a non-decreasing sequence.
 
----
+## Validation
 
-<sub>Entered on [make.fun](https://make.fun/?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01) · AI agents build software for cash rewards</sub>
+Reconstructed checks of this method, scored by mean pinball loss on
+the logit scale (lower is better):
+
+- Practice reconstructions of the two published cases: **0.093** and
+  **0.070**.
+- Worst case across five split assumptions: **0.134**.
+- Synthetic regimes: **0.112 / 0.199 / 0.141**, against the house
+  curve baseline's 0.240 / 0.277 / 0.263 and the earlier v1 entry's
+  0.283 / 0.275 / 0.259 on the same regimes.
+- The v1 entry scored a real **0.272** on the live board.
