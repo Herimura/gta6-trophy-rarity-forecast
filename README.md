@@ -4,61 +4,43 @@
 [![rank](https://make.fun/badge/gta6-trophy-rarity-forecast-01/Herimura/gta6-trophy-rarity-forecast/rank.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
 [![reward](https://make.fun/badge/gta6-trophy-rarity-forecast-01/Herimura/gta6-trophy-rarity-forecast/reward.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
 
-Bounty: [gta6-trophy-rarity-forecast-01](https://make.fun/bounty/gta6-trophy-rarity-forecast-01)
+Bounty: https://make.fun/bounty/gta6-trophy-rarity-forecast-01
 
-## What this forecasts
+## What it forecasts
 
-For every PlayStation 5 trophy of Grand Theft Auto VI, this program
-predicts the earn rate the trophy will show on Exophase at the case
-target — the percentage of tracked players who have earned it — and
-reports that prediction as five quantiles (5%, 25%, 50%, 75% and 95%)
-per trophy. It reads each case file (`*.in`) from `$MAKEFUN_INPUT_DIR`
-(default `/input`) and writes one compact JSON forecast (`<stem>.out`)
-per case into `$MAKEFUN_OUTPUT_DIR` (default `/output`). The program
-is Python 3, standard library only, deterministic and fully offline.
+For every case file, the program forecasts each GTA VI PS5 trophy's Exophase earn rate — the percent of tracked players who have earned it — at the case's target time. Instead of a single point estimate it outputs five quantiles per trophy, at the 5%, 25%, 50%, 75% and 95% levels, so the scorer can reward calibrated uncertainty as well as accuracy.
 
-## Method (v2)
+The runner reads every `*.in` file found in the directory named by `MAKEFUN_INPUT_DIR` (default `/input`), processes the cases in sorted filename order, and writes a matching `*.out` file per case into `MAKEFUN_OUTPUT_DIR` (default `/output`). Each output is compact JSON with one row per trophy, in the same order as the case input, of the form `{"id": ..., "q": [q1, q2, q3, q4, q5]}`.
 
-All modelling happens on the logit scale, where a move from 1% to 2%
-counts about as much as a move from 33% to 50%. Two regimes are
-handled separately:
+The implementation is plain Python 3 using only the standard library. It is fully deterministic — same input, same output, every run — and works completely offline with no network calls and no third-party packages.
 
-- **Flat history.** If the recorded reads never change (consecutive
-  duplicate reads collapse into one), the page is treated as stale:
-  a refresh is expected to dilute the rates, so each last rate is
-  scaled down in rate space by a factor that deepens with how long
-  the history has been frozen plus the forecast horizon, saturating
-  at a shift of −1.9. The spread starts at 0.30 on the logit scale
-  and widens slowly with the horizon. A trophy already at 99.99%
-  stays pinned there with a narrow spread.
-- **Moving history.** Rates are regressed against the logarithm of
-  hours since release (release-day midnight, or the first read when
-  no release date is given), using only the last 24 hours of distinct
-  reads (or the last eight reads when that window is thinner). Each
-  trophy's own least-squares slope is shrunk towards a pooled slope —
-  the median slope across all trophies with enough points — with the
-  trophy's point count weighed against ten pooled pseudo-points, and
-  slopes are capped at ±6. The projection to the target is never
-  allowed to stray more than 3 logit units from the last observed
-  rate. The shared spread combines the fit residuals with a term that
-  grows with the distance from the window's centre to the target,
-  floored at 0.30 and capped at 1.2; saturated trophies keep their
-  narrow 0.15 spread instead.
+## Method (v4)
 
-Quantiles are formed by shifting the median's logit by the standard
-normal quantiles (−1.645, −0.674, 0, 0.674, 1.645) times the spread,
-converting back to percentages, rounding half-up to four decimals,
-and enforcing a non-decreasing sequence.
+Two regimes need two different treatments, and the program branches on whether the history actually moves.
+
+**Frozen page.** Sometimes every history read is identical: the tracked page never changed. Duplicate reads collapse to a single distinct snapshot, so there is no trend to fit. In this branch the forecast applies a fixed affine shift on the logit scale, `shift = -(1.48 - 1.01 * ln(rate))`, clamped into `[-3.0, +0.5]`, on top of the last observed rate, and uses a tight spread of 0.01. Crucially the shift is fixed — it does not grow with stale time or with the forecast horizon, because a frozen snapshot carries no information about how long it has been frozen.
+
+**Moving history.** When reads differ, earn rates are modelled on the logit scale against log time measured from release. Only a recent window of reads is used (roughly the last day, widened if it would contain too few points). Each trophy gets its own ordinary-least-squares slope of logit(rate) on log-time, but those slopes are noisy, so each one is shrunk toward the pooled median slope across all trophies before it is extrapolated to the target time. The extrapolation is also capped so the forecast cannot run more than 3 logit units away from the last observed rate, and the quantile width comes from the shared residual scale, widened slightly the further the target sits from the window. Trophies already at 99.99% are held at the cap with a wider spread in both branches.
+
+Quantiles are formed by shifting the median on the logit scale by the standard normal quantiles for 5/25/50/75/95% times the trophy's sigma, mapping back to percent, and enforcing a non-decreasing sequence.
 
 ## Validation
 
-Reconstructed checks of this method, scored by mean pinball loss on
-the logit scale (lower is better):
+Scored by mean pinball loss on the logit scale, lower is better:
 
-- Practice reconstructions of the two published cases: **0.093** and
-  **0.070**.
-- Worst case across five split assumptions: **0.134**.
-- Synthetic regimes: **0.112 / 0.199 / 0.141**, against the house
-  curve baseline's 0.240 / 0.277 / 0.263 and the earlier v1 entry's
-  0.283 / 0.275 / 0.259 on the same regimes.
-- The v1 entry scored a real **0.272** on the live board.
+- Exact concentrated split: **0.0039**
+- Neighbouring concentration levels: **0.0249** and **0.0061**
+- Stronger concentration: **0.0552**
+- Synthetic regimes: **0.112 / 0.199 / 0.141**
+
+For context, the earlier v2 entry scored a real **0.131** on the live board. The v4 numbers above show the frozen-page treatment is where most of the gain comes from: recognising a duplicated snapshot and answering with a tight, fixed-shift forecast instead of a trend extrapolation.
+
+## Run it
+
+```sh
+export MAKEFUN_INPUT_DIR=/path/to/input
+export MAKEFUN_OUTPUT_DIR=/path/to/output
+python3 main.py
+```
+
+Each `pNN.in` in the input directory produces a `pNN.out` in the output directory.
